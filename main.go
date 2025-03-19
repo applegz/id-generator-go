@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	epoch        = int64(1672531200000) // Custom epoch (e.g., 2023-01-01 in ms)
+	epoch        = int64(1672531200000) // Custom epoch (2023-01-01 in ms)
 	workerIDBits = 10
 	sequenceBits = 12
 
@@ -23,21 +23,22 @@ type Snowflake struct {
 	lastTS   int64
 	sequence int64
 	workerID int64
+	counter  int64 // Tracks generated IDs
 }
 
-// NewSnowflake creates a new Snowflake generator with the given worker ID, returning an error for invalid IDs.
 func NewSnowflake(workerID int64) (*Snowflake, error) {
 	if workerID < 0 || workerID > maxWorkerID {
 		return nil, fmt.Errorf("workerID must be between 0 and %d", maxWorkerID)
 	}
-	return &Snowflake{
+	sf := &Snowflake{
 		workerID: workerID,
 		lastTS:   -1,
 		sequence: 0,
-	}, nil
+	}
+	go sf.logRate() // Start logging in background
+	return sf, nil
 }
 
-// NextID generates the next unique ID based on the snowflake algorithm, ensuring thread safety and time-based ordering.
 func (s *Snowflake) NextID() int64 {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -46,7 +47,6 @@ func (s *Snowflake) NextID() int64 {
 	if now == s.lastTS {
 		s.sequence = (s.sequence + 1) & maxSequence
 		if s.sequence == 0 {
-			// Sequence exhausted in this ms, wait for next millisecond
 			for now <= s.lastTS {
 				now = currentTimeMillis()
 			}
@@ -56,6 +56,7 @@ func (s *Snowflake) NextID() int64 {
 	}
 
 	s.lastTS = now
+	s.counter++ // Increment count for logging
 
 	id := ((now - epoch) << timestampShift) |
 		(s.workerID << workerIDShift) |
@@ -64,18 +65,37 @@ func (s *Snowflake) NextID() int64 {
 	return id
 }
 
+func (s *Snowflake) logRate() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.mutex.Lock()
+		count := s.counter
+		s.counter = 0 // Reset for next interval
+		s.mutex.Unlock()
+
+		fmt.Printf("[ID Stats] Generated %d IDs in the last 1 second\n", count)
+	}
+}
+
 func currentTimeMillis() int64 {
 	return time.Now().UnixNano() / 1e6
 }
 
 func main() {
-	sf, err := NewSnowflake(1) // Worker ID = 1
+	sf, err := NewSnowflake(1)
 	if err != nil {
 		panic(err)
 	}
 
-	for i := 0; i < 10; i++ {
-		id := sf.NextID()
-		fmt.Printf("ID %d: %d\n", i+1, id)
+	// Simulate high-throughput generation (example)
+	for i := 0; i < 100000; i++ {
+		_ = sf.NextID()
+		// Optionally sleep for demo purposes
+		time.Sleep(10 * time.Microsecond)
 	}
+
+	// Keep program running to see logging (for demo)
+	select {}
 }
